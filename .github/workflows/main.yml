@@ -39,7 +39,7 @@ jobs:
           # 启用 'exit on error' 模式，任何命令失败都会导致脚本立即退出
           set -e
 
-          OUTPUT_FILE="../../private_script_stdout.log"
+          OUTPUT_FILE="../private_script_stdout.log"
           
           echo "DEBUG: Current working directory for script execution: $(pwd)"
           echo "DEBUG: Expected output file path: $OUTPUT_FILE (relative to root)"
