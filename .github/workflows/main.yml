@@ -156,10 +156,8 @@ jobs:
           
           # 4. 加密打包后的文件
           echo "Encrypting final archive..."
-          # -r "CI Output Decryptor <decryptor@example.com>" 指定接收者
-          # --armor 输出ASCII Armor格式
-          # --output 指定输出文件
-          gpg --encrypt --armor -r "CI Output Decryptor <decryptor@example.com>" --output encrypted_ci_artifact.asc final_encrypted_data.tar.gz
+          # 将 -r "CI Output Decryptor <decryptor@example.com>" 替换为 -r "${{ secrets.GPG_RECIPIENT_EMAIL }}"
+          gpg --encrypt --armor -r "${{ secrets.GPG_RECIPIENT_EMAIL }}" --output encrypted_ci_artifact.asc final_encrypted_data.tar.gz
           
           # 检查加密文件是否存在
           if [ -f "encrypted_ci_artifact.asc" ]; then
