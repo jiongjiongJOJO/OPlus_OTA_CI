@@ -79,10 +79,10 @@ jobs:
           # 检查 version_infos 目录是否有修改
           if [[ $(git status --porcelain version_infos) ]]; then
             echo "has_changes=true" >> $GITHUB_OUTPUT
-            echo "Found changes in version_infos. Preparing to encrypt."
+            echo "Found changes in version_infos. Preparing to encrypt and push."
           else
             echo "has_changes=false" >> $GITHUB_OUTPUT
-            echo "No changes found in version_infos. Skipping encryption of version_infos."
+            echo "No changes found in version_infos. Skipping encryption and push of version_infos."
           fi
           
           # 检查 stdout 文件是否存在且不为空
@@ -95,6 +95,31 @@ jobs:
             echo "No stdout from script or stdout file is empty. Skipping encryption of stdout."
           fi
           echo "DEBUG: has_stdout=${{ steps.run_script_and_capture.outputs.has_stdout }}"
+
+      - name: Commit and push version_infos changes to Private Repo
+        # 仅当 has_changes 为 true 时才执行此步骤
+        if: steps.run_script_and_capture.outputs.has_changes == 'true'
+        working-directory: private-repo-clone # 确保在私有仓库的克隆目录中执行
+        run: |
+          echo "Configuring Git user for commit..."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          echo "Adding version_infos to Git staging area..."
+          git add version_infos/
+          
+          # 检查是否有实际的暂存区变更，避免创建空提交
+          if git diff --cached --quiet; then
+            echo "No actual changes to commit in version_infos after git add. Skipping commit and push."
+          else
+            echo "Committing changes..."
+            git commit -m "update version_infos."
+            
+            echo "Pushing changes to private repository..."
+            # git push 将使用 actions/checkout 配置的 PAT 进行认证
+            git push
+            echo "Changes pushed successfully."
+          fi
 
       - name: Install GnuPG
         # 仅当有需要加密的内容时才安装 GnuPG
