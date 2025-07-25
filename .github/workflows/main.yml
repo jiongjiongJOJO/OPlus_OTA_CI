@@ -1,0 +1,146 @@
+name: Run Private Repo CI, Encrypt Output & Version Infos
+
+on:
+  schedule:
+    # 每天UTC时间16:00, 0:00, 8:00（对应北京时间0:00, 8:00, 16:00）
+    # 建议根据需求调整，例如每天一次。
+    - cron: '*/20 * * * *'
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  run-script-and-encrypt:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Public Repo (Repo B)
+        uses: actions/checkout@v4
+
+      - name: Checkout Private Repo (Repo A)
+        uses: actions/checkout@v4
+        with:
+          repository: jiongjiongJOJO/OPlus_OTA
+          token: ${{ secrets.PRIVATE_REPO_PAT }}
+          path: private-repo-clone
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache-dependency-path: private-repo-clone/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd private-repo-clone
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run private script, capture output, and check for changes
+        id: run_script_and_capture
+        working-directory: private-repo-clone # 在私有仓库克隆的目录中执行
+        run: |
+          # 定义一个临时文件来捕获 run_all.py 的标准输出
+          # 这个文件将位于公共仓库的工作目录根部
+          OUTPUT_FILE="../../private_script_stdout.log"
+          
+          # 运行私有脚本，将其标准输出和标准错误都重定向到 OUTPUT_FILE
+          # 2>&1 将 stderr 重定向到 stdout，然后 stdout (包括 stderr) 重定向到文件
+          # 使用 `tee` 命令可以将输出同时打印到控制台和文件，但为了安全，我们不打印到控制台。
+          # 所以这里直接重定向到文件。
+          timeout 20m python run_all.py > "$OUTPUT_FILE" 2>&1
+          
+          echo "Private script execution finished. Output saved to $OUTPUT_FILE"
+
+          # 检查 version_infos 目录是否有修改
+          if [[ $(git status --porcelain version_infos) ]]; then
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "Found changes in version_infos. Preparing to encrypt."
+          else
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "No changes found in version_infos. Skipping encryption of version_infos."
+          fi
+          
+          # 检查输出文件是否为空，如果为空，也无需加密stdout
+          if [ -s "$OUTPUT_FILE" ]; then
+            echo "has_stdout=true" >> $GITHUB_OUTPUT
+            echo "Found stdout from script. Preparing to encrypt."
+          else
+            echo "has_stdout=false" >> $GITHUB_OUTPUT
+            echo "No stdout from script. Skipping encryption of stdout."
+          fi
+
+      - name: Install GnuPG
+        # 仅当有需要加密的内容时才安装 GnuPG
+        if: steps.run_script_and_capture.outputs.has_changes == 'true' || steps.run_script_and_capture.outputs.has_stdout == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gnupg
+
+      - name: Import GPG Public Key for Encryption
+        # 仅当有需要加密的内容时才导入密钥
+        if: steps.run_script_and_capture.outputs.has_changes == 'true' || steps.run_script_and_capture.outputs.has_stdout == 'true'
+        run: |
+          echo "${{ secrets.GPG_PUBLIC_KEY }}" | gpg --import
+          gpg --list-keys # 验证公钥是否已导入 (可选，用于调试)
+
+      - name: Archive and Encrypt All Sensitive Data
+        # 仅当有需要加密的内容时才执行此步骤
+        if: steps.run_script_and_capture.outputs.has_changes == 'true' || steps.run_script_and_capture.outputs.has_stdout == 'true'
+        run: |
+          # 创建一个临时目录来存放所有待加密的文件
+          ENCRYPTION_TEMP_DIR="to_encrypt_data"
+          mkdir -p "$ENCRYPTION_TEMP_DIR"
+          
+          # 1. 如果有 version_infos 变化，将其打包并放入临时目录
+          if [ "${{ steps.run_script_and_capture.outputs.has_changes }}" == "true" ]; then
+            echo "Archiving version_infos..."
+            # 进入私有仓库克隆的目录，将 version_infos 目录打包
+            cd private-repo-clone
+            tar -czf ../"$ENCRYPTION_TEMP_DIR"/version_infos_changes.tar.gz version_infos/
+            cd .. # 回到工作目录根部
+          fi
+          
+          # 2. 如果有 stdout 输出，将其复制到临时目录
+          if [ "${{ steps.run_script_and_capture.outputs.has_stdout }}" == "true" ]; then
+            echo "Copying private_script_stdout.log..."
+            cp private_script_stdout.log "$ENCRYPTION_TEMP_DIR"/
+          fi
+          
+          # 3. 将临时目录下的所有内容打包成一个大的 tar.gz
+          echo "Creating final archive for encryption..."
+          tar -czf final_encrypted_data.tar.gz "$ENCRYPTION_TEMP_DIR"/
+          
+          # 4. 加密打包后的文件
+          echo "Encrypting final archive..."
+          # -r "CI Output Decryptor <decryptor@example.com>" 指定接收者
+          # --armor 输出ASCII Armor格式
+          # --output 指定输出文件
+          gpg --encrypt --armor -r "CI Output Decryptor <decryptor@example.com>" --output encrypted_ci_artifact.asc final_encrypted_data.tar.gz
+          
+          # 检查加密文件是否存在
+          if [ -f "encrypted_ci_artifact.asc" ]; then
+            echo "Encrypted artifact file created successfully."
+          else
+            echo "Error: Encrypted artifact file not found!"
+            exit 1
+          fi
+          
+          # 可选：显示加密文件的前几行（不显示敏感内容）
+          echo "Encrypted output (first 10 lines):"
+          head -n 10 encrypted_ci_artifact.asc
+
+      - name: Upload Encrypted Artifact
+        # 仅当有需要加密的内容时才上传
+        if: steps.run_script_and_capture.outputs.has_changes == 'true' || steps.run_script_and_capture.outputs.has_stdout == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-ci-output-and-version-infos
+          path: encrypted_ci_artifact.asc
+          retention-days: 7
+
+      # 可选：清理私有仓库克隆和临时文件，确保不残留敏感数据
+      - name: Clean up sensitive files
+        run: |
+          rm -rf private-repo-clone
+          rm -f private_script_stdout.log
+          rm -rf to_encrypt_data # 删除临时目录
+          rm -f final_encrypted_data.tar.gz # 删除未加密的打包文件
