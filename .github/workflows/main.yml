@@ -156,7 +156,7 @@ jobs:
           
           # 4. 加密打包后的文件
           echo "Encrypting final archive..."
-          gpg --batch --yes --encrypt --armor -r "${{ secrets.GPG_RECIPIENT_EMAIL }}" --output encrypted_ci_artifact.asc final_encrypted_data.tar.gz
+          gpg --batch --yes --trust-model always --encrypt --armor -r "${{ secrets.GPG_RECIPIENT_EMAIL }}" --output encrypted_ci_artifact.asc final_encrypted_data.tar.gz
           
           # 检查加密文件是否存在
           if [ -f "encrypted_ci_artifact.asc" ]; then
